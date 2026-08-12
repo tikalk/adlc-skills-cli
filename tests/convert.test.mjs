@@ -193,3 +193,83 @@ describe("Command generation — opencode user-invoked skills (wrapper)", () => 
     assert.ok(content.includes("# Team Setup"), "Full body inlined when execution forced");
   });
 });
+
+describe("Command generation — User Input framing (args forwarding)", () => {
+  it("wrapper mode frames $ARGUMENTS under ## User Input with consume-direct directive", () => {
+    const agent = getAgent("opencode");
+    const content = generateCommand(mockUserInvokedSkill, agent, { source: "test" });
+
+    assert.ok(content.includes("## User Input"), "User Input heading present in wrapper body");
+    assert.ok(content.includes("$ARGUMENTS"), "Args placeholder present");
+    assert.ok(
+      content.includes("do not ask the user to repeat or rephrase"),
+      "Consume-direct directive present",
+    );
+    assert.ok(
+      content.includes("If this section is empty, proceed with the skill's default first step"),
+      "Empty-case fallback present",
+    );
+  });
+
+  it("wrapper does not double-append $ARGUMENTS (placeholder owned by body)", () => {
+    const agent = getAgent("opencode");
+    const content = generateCommand(mockUserInvokedSkill, agent, { source: "test" });
+    const occurrences = (content.match(/\$ARGUMENTS/g) || []).length;
+    assert.equal(occurrences, 1, "$ARGUMENTS appears exactly once (no duplicate append)");
+  });
+
+  it("execution mode frames $ARGUMENTS under ## User Input with same directive", () => {
+    const agent = getAgent("claude-code");
+    const content = generateCommand(mockUserInvokedSkill, agent, { source: "test" });
+
+    assert.ok(content.includes("## User Input"), "User Input heading present in execution body");
+    assert.ok(content.includes("$ARGUMENTS"), "Args placeholder present");
+    assert.ok(
+      content.includes("do not ask the user to repeat or rephrase"),
+      "Consume-direct directive present in execution body",
+    );
+  });
+
+  it("execution does not double-append $ARGUMENTS", () => {
+    const agent = getAgent("claude-code");
+    const content = generateCommand(mockUserInvokedSkill, agent, { source: "test" });
+    const occurrences = (content.match(/\$ARGUMENTS/g) || []).length;
+    assert.equal(occurrences, 1, "$ARGUMENTS appears exactly once in execution body");
+  });
+
+  it("wrapper on TOML agent uses {{args}} placeholder in User Input block", () => {
+    const geminiAgent = getAgent("gemini-cli");
+    const opencodeWithTomlPlaceholder = { ...getAgent("opencode"), args_placeholder: "{{args}}" };
+    const content = generateCommand(mockUserInvokedSkill, opencodeWithTomlPlaceholder, {
+      mode: "wrapper",
+      source: "test",
+    });
+
+    assert.ok(content.includes("## User Input"), "User Input heading present");
+    assert.ok(content.includes("{{args}}"), "TOML placeholder used in wrapper body");
+    assert.ok(!content.includes("$ARGUMENTS"), "No markdown placeholder leaked into TOML agent");
+  });
+
+  it("wrapper on YAML agent uses {{args}} placeholder in User Input block", () => {
+    const yamlWrapperAgent = { ...getAgent("goose"), default_mode: "wrapper", user_invoked_mode: "wrapper" };
+    const content = generateCommand(mockUserInvokedSkill, yamlWrapperAgent, {
+      mode: "wrapper",
+      source: "test",
+    });
+
+    assert.ok(content.includes("## User Input"), "User Input heading present in YAML");
+    assert.ok(content.includes("{{args}}"), "YAML placeholder used in wrapper body");
+    assert.ok(
+      (content.match(/\{\{args\}\}/g) || []).length === 1,
+      "{{args}} appears exactly once in YAML wrapper (no double-append)",
+    );
+  });
+
+  it("inline mode is unaffected — appends $ARGUMENTS externally, no User Input block", () => {
+    const agent = getAgent("opencode");
+    const content = generateCommand(mockSkill, agent, { mode: "inline", source: "test" });
+
+    assert.ok(content.includes("$ARGUMENTS"), "Inline still appends placeholder");
+    assert.ok(!content.includes("## User Input"), "Inline does not add User Input framing");
+  });
+});

@@ -76,16 +76,15 @@ function buildInlineBody(skill, agent) {
 // as documentation). Used when the agent respects disable-model-invocation
 // (e.g. claude-code hides such skills from the model, so a skill-tool call
 // would fail) — the inlined body is the only working path.
-function buildExecutionBody(skill) {
+function buildExecutionBody(skill, agent) {
   const baseDir = skill.dir || ".";
   const note = `Base directory for this skill: ${baseDir}\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.`;
+  const userInput = buildUserInputBlock(agent);
   return `<EXTREMELY_IMPORTANT>
 Execute the following workflow for the user. Do not summarize, explain, or describe it — carry out the steps directly, starting with the first step.
 </EXTREMELY_IMPORTANT>
 
-## User Input
-
-$ARGUMENTS
+${userInput}
 
 ${note}
 
@@ -94,13 +93,24 @@ ${note}
 ${skill.body}`;
 }
 
-function buildWrapperBody(skill) {
+function buildWrapperBody(skill, agent) {
   const summary = extractSkillSummary(skill.body);
   const lead = `Invoke the \`${skill.name}\` skill.`;
+  const userInput = buildUserInputBlock(agent);
   if (summary) {
-    return `${lead}\n\n${summary}`;
+    return `${lead}\n\n${summary}\n\n${userInput}`;
   }
-  return lead;
+  return `${lead}\n\n${userInput}`;
+}
+
+// Shared "## User Input" framing block for wrapper and execution modes.
+// Presents the agent's args placeholder as workflow input the model should
+// consume directly, with an explicit empty-case fallback so the model doesn't
+// stall when the user supplied no arguments.
+function buildUserInputBlock(agent) {
+  const placeholder = agent && agent.args_placeholder;
+  if (!placeholder) return "";
+  return `## User Input\n\nThe arguments supplied when invoking this command appear below. Read them and use them as input to the skill workflow — do not ask the user to repeat or rephrase what they already provided. If this section is empty, proceed with the skill's default first step.\n\n${placeholder}`;
 }
 
 function extractSkillSummary(body) {
@@ -156,9 +166,9 @@ function generateMarkdown(skill, agent, mode, source, opts) {
 
   let content = `---\ndescription: ${escapeYamlValue(description)}\n---\n\n${header}\n\n${body}`;
 
-  // Wrapper needs $ARGUMENTS appended; execution already includes it; inline
-  // appends it only if the body doesn't reference it.
-  if (mode === "wrapper" || (mode === "inline" && !skill.body.includes("$ARGUMENTS"))) {
+  // Wrapper and execution bodies now include the args placeholder inline via
+  // buildUserInputBlock; inline appends it only if the body doesn't reference it.
+  if (mode === "inline" && !skill.body.includes("$ARGUMENTS")) {
     content += buildArgsLine(agent);
   }
 
@@ -166,8 +176,8 @@ function generateMarkdown(skill, agent, mode, source, opts) {
 }
 
 function buildBody(skill, agent, mode) {
-  if (mode === "execution") return buildExecutionBody(skill);
-  if (mode === "wrapper") return buildWrapperBody(skill);
+  if (mode === "execution") return buildExecutionBody(skill, agent);
+  if (mode === "wrapper") return buildWrapperBody(skill, agent);
   return buildInlineBody(skill, agent);
 }
 
@@ -177,7 +187,7 @@ function generateToml(skill, agent, mode, source, opts) {
   const body = buildBody(skill, agent, mode);
 
   let promptBody = body;
-  if (mode === "wrapper" || (mode === "inline" && !body.includes("{{args}}"))) {
+  if (mode === "inline" && !body.includes("{{args}}")) {
     promptBody += buildArgsLine(agent);
   }
 
@@ -193,7 +203,7 @@ function generateYaml(skill, agent, mode, source, opts) {
   const body = buildBody(skill, agent, mode);
 
   let promptBody = body;
-  if (mode === "wrapper" || (mode === "inline" && !body.includes("{{args}}"))) {
+  if (mode === "inline" && !body.includes("{{args}}")) {
     promptBody += buildArgsLine(agent);
   }
 
