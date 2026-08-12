@@ -1,6 +1,6 @@
 {
   "name": "adlc-skills-cli",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Generic CLI that wraps npx skills add and converts installed skills to slash commands + lifecycle event hooks for any coding agent.",
   "type": "module",
   "bin": {
