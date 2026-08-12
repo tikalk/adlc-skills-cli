@@ -42,6 +42,9 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
+      - name: Upgrade npm for Trusted Publishing (OIDC requires npm >= 11.5.1)
+        run: npm install -g npm@latest
+
       - name: Verify tag matches package version
         run: |
           TAG="${GITHUB_REF#refs/tags/v}"
