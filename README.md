@@ -42,8 +42,8 @@ adlc-skills-cli add <source> -a <agent>
 | Command | Description |
 |---------|-------------|
 | `add <source> -a <agent>` | Install skills via `npx skills add` + generate commands + wire events |
-| `upgrade [-a <agent>]` | Re-generate commands from currently-installed skills (header-matched overwrite) |
-| `remove [-a <agent>]` | Remove generated commands + event configs (marker-matched only) |
+| `upgrade [-a <agent>]` | Re-generate commands from currently-installed skills (header-matched overwrite); re-generates events from local `.events.json` |
+| `remove [-a <agent>]` | Remove generated commands + event configs (marker-matched only); also removes dispatcher + copied `.events.json` |
 | `status [-a <agent>]` | Show what's installed per agent + dispatcher + event status |
 | `agents` | List supported agents, directories, formats, event support |
 
@@ -55,14 +55,14 @@ adlc-skills-cli add <source> -a <agent>
 | `-g, --global` | Install to user directory instead of project |
 | `--no-events` | Skip event config generation |
 | `--prefix <str>` | Namespace command filenames (e.g., `adlc.team-setup.md`) |
-| `--mode <mode>` | `inline` (default, embeds full skill body) or `wrapper` (references skill by name). |
-| `--skill <name>` | Install/generate for one skill only (use `'*'` for all) |
+| `--mode <mode>` | `inline` (embeds full skill body) or `wrapper` (references skill by name). Overrides the per-agent default — opencode, claude-code, cursor, copilot, and codex default to `wrapper`; all others default to `inline`. |
+| `--skill, -s <name>` | Install/generate for one skill only (use `'*'` for all) |
 | `--copy` | Copy files instead of symlinking (passthrough to `npx skills`) |
 | `-y, --yes` | Skip confirmation prompts |
 
 ## Supported agents
 
-23 agents across 3 command formats. 9 agents support event hooks.
+24 agents across 3 command formats. 9 agents support event hooks.
 
 | Agent | Commands dir | Format | Events |
 |-------|-------------|--------|--------|
@@ -77,13 +77,13 @@ adlc-skills-cli add <source> -a <agent>
 | tabnine-cli | `.tabnine/agent/commands/` | toml | yes |
 | amp | `.agents/commands/` | markdown | no |
 | goose | `.goose/recipes/` | yaml | no |
-| ...and 12 more | | | |
+| ...and 13 more | | | |
 
 Run `adlc-skills-cli agents` for the full list.
 
 ## Command generation: two modes
 
-### Inline (default)
+### Inline
 
 Embeds the full `SKILL.md` body in the command file — self-contained, works on any agent even without skill support:
 
@@ -179,6 +179,8 @@ Skills repos declare events at the repo root:
 ```
 
 Repos without `.events.json` (e.g., mattpocock/skills) simply get commands only — events are skipped silently.
+
+During `add`, the `.events.json` manifest is copied from the source repo to the project root so that `upgrade` can re-read it without the source repo being present.
 
 ### The dispatcher: two execution paths
 
