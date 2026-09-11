@@ -24,10 +24,10 @@
 //   2. Body path (superpowers model): output the skill's markdown body
 //      (frontmatter stripped). LLM-interpreted orientation/instructions.
 
-import { readFileSync, readSync, existsSync, readdirSync, statSync, accessSync, constants } from "node:fs";
+import { readFileSync, readSync, existsSync, readdirSync, statSync, accessSync, constants, realpathSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { isatty } from "node:tty";
-import { join, resolve, dirname, sep, delimiter } from "node:path";
+import { join, resolve, dirname, sep, delimiter, relative, isAbsolute, posix, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const DEFAULT_TIMEOUT = 60;
@@ -64,13 +64,19 @@ function main() {
     process.exit(0); // fail-open
   }
 
-  const content = readFileSync(skillPath, "utf-8");
+  let content;
+  try {
+    content = readFileSync(skillPath, "utf-8");
+  } catch {
+    process.stderr.write(`dispatcher: skill "${skillName}" is unreadable — skipping\n`);
+    process.exit(0); // fail-open
+  }
   const { frontmatter, body } = parseFrontmatter(content);
   const payload = readPayload();
 
   // Path 1: script execution (spec-kit model) — applies to ALL events.
   if (frontmatter && frontmatter.scripts) {
-    const argv = resolveScriptArgv(frontmatter.scripts, dirname(skillPath));
+    const argv = resolveScriptArgv(frontmatter.scripts, dirname(skillPath), projectRoot);
     if (argv) {
       try {
         const result = spawnSync(argv[0], argv.slice(1), {
@@ -234,7 +240,34 @@ function findLauncher(names) {
   return null;
 }
 
-function resolveScriptArgv(scriptsField, skillDir) {
+// Confine a script token to the project tree (spec-kit #4133):
+// Reject anchored tokens (absolute, drive, UNC) so resolve() can't
+// discard the skill directory, and verify the resolved path stays
+// inside the project root — including through symlink resolution so
+// a relative token that resolves via a symlink out of the project
+// cannot execute a host binary.
+function confineScriptPath(base, token, projectRoot) {
+  if (posix.isAbsolute(token) || win32.isAbsolute(token)) return null;
+  const candidate = resolve(base, token);
+  const root = resolve(projectRoot);
+  // Resolve symlinks on both sides BEFORE comparing, so macOS /var → /private/var
+  // doesn't cause a false ".." in the relative path. Return the original
+  // (non-realpath) candidate for execution so the path stays consistent with
+  // what the caller expects.
+  let realCandidate, realRoot;
+  try {
+    realCandidate = realpathSync(candidate);
+    realRoot = realpathSync(root);
+  } catch {
+    realCandidate = candidate;
+    realRoot = root;
+  }
+  const rel = relative(realRoot, realCandidate);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return null;
+  return candidate;
+}
+
+function resolveScriptArgv(scriptsField, skillDir, projectRoot) {
   // scripts: is either a YAML-style string ("sh: scripts/boot.sh\nps: ...")
   // already parsed by our frontmatter parser into an object, or a raw string.
   let scripts = scriptsField;
@@ -254,8 +287,8 @@ function resolveScriptArgv(scriptsField, skillDir) {
   const tokens = shlexSplit(scriptCmd);
   if (tokens.length === 0) return null;
 
-  const scriptPath = resolve(skillDir, tokens[0]);
-  if (!existsSync(scriptPath)) return null;
+  const scriptPath = confineScriptPath(skillDir, tokens[0], projectRoot);
+  if (scriptPath === null || !existsSync(scriptPath)) return null;
 
   const rest = tokens.slice(1);
 

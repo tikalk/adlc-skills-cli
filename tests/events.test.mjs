@@ -984,6 +984,215 @@ Body should NOT be output when script runs.`,
       rmSync(projectRoot, { recursive: true, force: true });
     }
   });
+
+  it("script path confinement: absolute token rejected (spec-kit #4133)", () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "adlc-abs-"));
+    try {
+      const skillsDir = join(projectRoot, ".agents", "skills");
+      mkdirSync(join(skillsDir, "evil-skill"), { recursive: true });
+      const outside = join(tmpdir(), "outside-evil.sh");
+      writeFileSync(outside, "#!/bin/bash\necho PWNED\n", "utf-8");
+      try { chmodSync(outside, 0o755); } catch {}
+      writeFileSync(
+        join(skillsDir, "evil-skill", "SKILL.md"),
+        `---
+name: evil-skill
+description: Absolute script path
+scripts:
+  sh: ${outside}
+---
+
+# evil-skill
+
+Body should be injected when script is rejected.`,
+        "utf-8",
+      );
+
+      installDispatcher(projectRoot);
+      const dispatcher = join(projectRoot, DISPATCHER_REL);
+
+      const result = spawnSync("node", [dispatcher, "session_start", "evil-skill", skillsDir, "10"], {
+        encoding: "utf-8",
+        cwd: projectRoot,
+      });
+
+      assert.equal(result.status, 0, `dispatcher exited ${result.status}: ${result.stderr}`);
+      assert.ok(!result.stdout.includes("PWNED"), "Host binary did NOT execute");
+      assert.ok(result.stdout.includes("Body should be injected"), "Degraded to body injection");
+      try { rmSync(outside, { force: true }); } catch {}
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("script path confinement: .. traversal outside project rejected (spec-kit #4133)", () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "adlc-dotdot-"));
+    try {
+      const skillsDir = join(projectRoot, ".agents", "skills");
+      mkdirSync(join(skillsDir, "traversal-skill"), { recursive: true });
+      // File outside projectRoot (in tmpdir, one level above projectRoot)
+      const outside = join(tmpdir(), "outside-traversal.sh");
+      writeFileSync(outside, "#!/bin/bash\necho ESCAPED\n", "utf-8");
+      try { chmodSync(outside, 0o755); } catch {}
+      // skillDir is 4 levels deep: projectRoot/.agents/skills/traversal-skill
+      // ../../../../ goes to parent of projectRoot = tmpdir
+      writeFileSync(
+        join(skillsDir, "traversal-skill", "SKILL.md"),
+        `---
+name: traversal-skill
+description: Dot-dot traversal
+scripts:
+  sh: ../../../../outside-traversal.sh
+---
+
+# traversal-skill
+
+Body should be injected when traversal is rejected.`,
+        "utf-8",
+      );
+
+      installDispatcher(projectRoot);
+      const dispatcher = join(projectRoot, DISPATCHER_REL);
+
+      const result = spawnSync("node", [dispatcher, "session_start", "traversal-skill", skillsDir, "10"], {
+        encoding: "utf-8",
+        cwd: projectRoot,
+      });
+
+      assert.equal(result.status, 0, `dispatcher exited ${result.status}: ${result.stderr}`);
+      assert.ok(!result.stdout.includes("ESCAPED"), "Host binary did NOT execute");
+      assert.ok(result.stdout.includes("Body should be injected"), "Degraded to body injection");
+      try { rmSync(outside, { force: true }); } catch {}
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("script path confinement: symlink escape rejected (spec-kit #4133)", () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "adlc-symlink-"));
+    try {
+      const skillsDir = join(projectRoot, ".agents", "skills");
+      mkdirSync(join(skillsDir, "sneak-skill"), { recursive: true });
+      mkdirSync(join(skillsDir, "sneak-skill", "scripts"), { recursive: true });
+      const host = join(tmpdir(), "host-sneak.sh");
+      writeFileSync(host, "#!/bin/bash\necho SYMLINKED\n", "utf-8");
+      try { chmodSync(host, 0o755); } catch {}
+      try {
+        symlinkSync(host, join(skillsDir, "sneak-skill", "scripts", "sneak.sh"));
+      } catch {
+        // Symlinks not available — skip
+        try { rmSync(host, { force: true }); } catch {}
+        return;
+      }
+
+      writeFileSync(
+        join(skillsDir, "sneak-skill", "SKILL.md"),
+        `---
+name: sneak-skill
+description: Symlink escape
+scripts:
+  sh: scripts/sneak.sh
+---
+
+# sneak-skill
+
+Body should be injected when symlink is rejected.`,
+        "utf-8",
+      );
+
+      installDispatcher(projectRoot);
+      const dispatcher = join(projectRoot, DISPATCHER_REL);
+
+      const result = spawnSync("node", [dispatcher, "session_start", "sneak-skill", skillsDir, "10"], {
+        encoding: "utf-8",
+        cwd: projectRoot,
+      });
+
+      assert.equal(result.status, 0, `dispatcher exited ${result.status}: ${result.stderr}`);
+      assert.ok(!result.stdout.includes("SYMLINKED"), "Symlinked host binary did NOT execute");
+      assert.ok(result.stdout.includes("Body should be injected"), "Degraded to body injection");
+      try { rmSync(host, { force: true }); } catch {}
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("script path confinement: valid relative script still runs (spec-kit #4133 regression guard)", () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "adlc-valid-rel-"));
+    try {
+      const skillsDir = join(projectRoot, ".agents", "skills");
+      mkdirSync(join(skillsDir, "good-skill"), { recursive: true });
+      mkdirSync(join(skillsDir, "good-skill", "scripts"), { recursive: true });
+      const scriptPath = join(skillsDir, "good-skill", "scripts", "boot.sh");
+      writeFileSync(scriptPath, "#!/bin/bash\necho SAFE_SCRIPT_OK\n", "utf-8");
+      try { chmodSync(scriptPath, 0o755); } catch {}
+      writeFileSync(
+        join(skillsDir, "good-skill", "SKILL.md"),
+        `---
+name: good-skill
+description: Valid relative script
+scripts:
+  sh: scripts/boot.sh
+---
+
+# good-skill
+
+Body should NOT appear when script runs.`,
+        "utf-8",
+      );
+
+      installDispatcher(projectRoot);
+      const dispatcher = join(projectRoot, DISPATCHER_REL);
+
+      const result = spawnSync("node", [dispatcher, "session_start", "good-skill", skillsDir, "10"], {
+        encoding: "utf-8",
+        cwd: projectRoot,
+      });
+
+      assert.equal(result.status, 0, `dispatcher exited ${result.status}: ${result.stderr}`);
+      assert.ok(result.stdout.includes("SAFE_SCRIPT_OK"), "Valid script ran successfully");
+      assert.ok(!result.stdout.includes("Body should NOT"), "Body NOT output when script runs");
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("unreadable skill file → fail-open with warning (spec-kit #3956)", { skip: process.platform === "win32" || (process.getuid && process.getuid() === 0) }, () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "adlc-unread-"));
+    try {
+      const skillsDir = join(projectRoot, ".agents", "skills");
+      mkdirSync(join(skillsDir, "perm-skill"), { recursive: true });
+      const skillMd = join(skillsDir, "perm-skill", "SKILL.md");
+      writeFileSync(
+        skillMd,
+        `---
+name: perm-skill
+description: Unreadable skill
+---
+
+# perm-skill
+
+Body should NOT be injected when file is unreadable.`,
+        "utf-8",
+      );
+      chmodSync(skillMd, 0o000);
+
+      installDispatcher(projectRoot);
+      const dispatcher = join(projectRoot, DISPATCHER_REL);
+
+      const result = spawnSync("node", [dispatcher, "session_start", "perm-skill", skillsDir, "10"], {
+        encoding: "utf-8",
+        cwd: projectRoot,
+      });
+
+      assert.equal(result.status, 0, "fail-open exits 0");
+      assert.ok(result.stderr.includes("unreadable"), "warning on stderr");
+      assert.equal(result.stdout, "", "no output from unreadable skill");
+      try { chmodSync(skillMd, 0o644); } catch {}
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Registry: events data", () => {
